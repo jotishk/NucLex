@@ -3,6 +3,14 @@ from rdflib import Graph, Namespace, URIRef, Literal
 from rdflib.namespace import RDF, RDFS, OWL, SKOS
 import re
 
+
+
+# How to run
+# Delete top couple of rows until the first row is "procedure" or the first term
+# Clean up other rows such as the ones on the bottom
+# Save as csv and rename to ontology.csv
+# Run this command python conv_csv_to_owl.py
+# nuclex.owl will be created which can be uploaded to protege
 # =========================
 # CONFIG
 # =========================
@@ -27,6 +35,65 @@ g.bind("rdfs", RDFS)
 g.bind("skos", SKOS)
 g.bind("oio", OIO)
 g.bind("iao", IAO)
+
+annotation_columns = [
+    "nuclex_nid",
+    "parent_OBO",
+    "obo_id",
+    "obo_axiom",
+    "radlex_purl",
+    "radlex_axiom",
+    "playbook_rpid",
+    "umls_cui",
+    "umls_axiom",
+    "nci_thesaurus_code",
+    "nci_thesaurus_axiom",
+    "snomedct_code",
+    "snomedct_axiom",
+    "ibsi_code",
+    "ibsi_axiom",
+    "dicom_code",
+    "Other",
+    "Other_axiom",
+    "Measurement?",
+    "Assignment ID",
+    "Approver/Endorser ID",
+    "Comments",
+    "Synonyms",
+    "Definitions"
+]
+
+annotation_properties = {}
+
+for col in annotation_columns:
+
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_]",
+        "_",
+        col
+    )
+
+    prop_uri = URIRef(
+        BASE_IRI + safe_name
+    )
+
+    annotation_properties[col] = prop_uri
+
+    g.add(
+        (
+            prop_uri,
+            RDF.type,
+            OWL.AnnotationProperty
+        )
+    )
+
+    g.add(
+        (
+            prop_uri,
+            RDFS.label,
+            Literal(col)
+        )
+    )
 
 # =========================
 # HIERARCHY COLUMNS
@@ -59,40 +126,6 @@ def add_literal_annotation(subject, predicate, value):
     if pd.notna(value) and str(value).strip():
         g.add((subject, predicate, Literal(str(value).strip())))
 
-def add_xrefs(subject, row):
-    xref_columns = [
-        "parent_OBO",
-        "obo_id",
-        "radlex_purl",
-        "playbook_rpid",
-        "umls_cui",
-        "nci_thesaurus_code",
-        "snomedct_code",
-        "ibsi_code",
-        "dicom_code",
-        "Other",
-    ]
-
-    for col in xref_columns:
-
-        if col not in row.index:
-            continue
-
-        value = row[col]
-
-        if pd.isna(value):
-            continue
-
-        text = str(value).strip()
-
-        if not text:
-            continue
-
-        for item in text.split(","):
-            item = item.strip()
-
-            if item:
-                g.add((subject, OIO.hasDbXref, Literal(item)))
 
 # =========================
 # READ CSV
@@ -190,7 +223,28 @@ for _, row in df.iterrows():
             row["Comments"]
         )
 
-    add_xrefs(leaf_uri, row)
+    for col, prop_uri in annotation_properties.items():
+
+        if col not in row.index:
+            continue
+
+        value = row[col]
+
+        if pd.isna(value):
+            continue
+
+        value = str(value).strip()
+
+        if not value:
+            continue
+
+        g.add(
+            (
+                leaf_uri,
+                prop_uri,
+                Literal(value)
+            )
+        )
 
     # =====================
     # CREATE ANCESTORS
