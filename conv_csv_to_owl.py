@@ -1,7 +1,3 @@
-import pandas as pd
-from rdflib import Graph, Namespace, URIRef, Literal
-from rdflib.namespace import RDF, RDFS, OWL, SKOS
-import re
 
 
 
@@ -11,6 +7,18 @@ import re
 # Save as csv and rename to ontology.csv
 # Run this command python conv_csv_to_owl.py
 # nuclex.owl will be created which can be uploaded to protege
+# You can add and remove columns by changing the annotation columns list in this script
+
+# =========================
+
+# CONFIG
+# =========================
+
+import pandas as pd
+from rdflib import Graph, Namespace, URIRef, Literal
+from rdflib.namespace import RDF, RDFS, OWL
+import re
+
 # =========================
 # CONFIG
 # =========================
@@ -28,13 +36,29 @@ g = Graph()
 
 NUCLEX = Namespace(BASE_IRI)
 OIO = Namespace("http://www.geneontology.org/formats/oboInOwl#")
-IAO = Namespace("http://purl.obolibrary.org/obo/IAO_")
 
 g.bind("owl", OWL)
 g.bind("rdfs", RDFS)
-g.bind("skos", SKOS)
 g.bind("oio", OIO)
-g.bind("iao", IAO)
+g.bind("nuclex", NUCLEX)
+
+# =========================
+# CUSTOM ANNOTATION PROPERTIES
+# =========================
+
+definition_prop = URIRef(BASE_IRI + "definition")
+synonym_prop = URIRef(BASE_IRI + "synonym")
+
+for prop, label in [
+    (definition_prop, "definition"),
+    (synonym_prop, "synonym")
+]:
+    g.add((prop, RDF.type, OWL.AnnotationProperty))
+    g.add((prop, RDFS.label, Literal(label)))
+
+# =========================
+# ANNOTATION COLUMNS
+# =========================
 
 annotation_columns = [
     "nuclex_nid",
@@ -56,11 +80,6 @@ annotation_columns = [
     "Other",
     "Other_axiom",
     "Measurement?",
-    "Assignment ID",
-    "Approver/Endorser ID",
-    "Comments",
-    "Synonyms",
-    "Definitions"
 ]
 
 annotation_properties = {}
@@ -114,18 +133,48 @@ hierarchy_cols = [
 # HELPERS
 # =========================
 
-def clean_id(nuclex_id):
-    return re.sub(r"[^A-Za-z0-9_]", "_", str(nuclex_id))
+def clean_id(value):
+    return re.sub(
+        r"[^A-Za-z0-9_]",
+        "_",
+        str(value)
+    )
 
 def create_class(uri, label):
+
     if (uri, RDF.type, OWL.Class) not in g:
-        g.add((uri, RDF.type, OWL.Class))
-        g.add((uri, RDFS.label, Literal(label)))
 
-def add_literal_annotation(subject, predicate, value):
+        g.add(
+            (
+                uri,
+                RDF.type,
+                OWL.Class
+            )
+        )
+
+        g.add(
+            (
+                uri,
+                RDFS.label,
+                Literal(label)
+            )
+        )
+
+def add_literal_annotation(
+    subject,
+    predicate,
+    value
+):
+
     if pd.notna(value) and str(value).strip():
-        g.add((subject, predicate, Literal(str(value).strip())))
 
+        g.add(
+            (
+                subject,
+                predicate,
+                Literal(str(value).strip())
+            )
+        )
 
 # =========================
 # READ CSV
@@ -133,10 +182,13 @@ def add_literal_annotation(subject, predicate, value):
 
 df = pd.read_csv(CSV_FILE)
 
-# Keeps track of the hierarchy path
+# Remove accidental spaces in headers
+df.columns = df.columns.str.strip()
+
+# Hierarchy state
 current_path = [None] * len(hierarchy_cols)
 
-# Maps labels to URIs
+# Label → URI mapping
 label_to_uri = {}
 
 # =========================
@@ -145,7 +197,10 @@ label_to_uri = {}
 
 for _, row in df.iterrows():
 
-    # Update hierarchy state
+    # ---------------------
+    # UPDATE HIERARCHY
+    # ---------------------
+
     for level, col in enumerate(hierarchy_cols):
 
         value = row.get(col)
@@ -154,18 +209,23 @@ for _, row in df.iterrows():
 
             current_path[level] = str(value).strip()
 
-            # Clear deeper levels
-            for deeper in range(level + 1, len(hierarchy_cols)):
+            for deeper in range(
+                level + 1,
+                len(hierarchy_cols)
+            ):
                 current_path[deeper] = None
 
             break
 
-    path_terms = [x for x in current_path if x]
+    path_terms = [
+        x
+        for x in current_path
+        if x
+    ]
 
     if not path_terms:
         continue
 
-    # Determine leaf term
     leaf_label = path_terms[-1]
 
     nuclex_id = row.get("nuclex_nid")
@@ -179,7 +239,14 @@ for _, row in df.iterrows():
 
     label_to_uri[leaf_label] = leaf_uri
 
-    create_class(leaf_uri, leaf_label)
+    create_class(
+        leaf_uri,
+        leaf_label
+    )
+
+    # ---------------------
+    # NUCLEX ID
+    # ---------------------
 
     add_literal_annotation(
         leaf_uri,
@@ -187,7 +254,34 @@ for _, row in df.iterrows():
         nuclex_id
     )
 
-    # Synonyms
+    # ---------------------
+    # DEFINITION
+    # ---------------------
+
+    if "Definitions" in row.index:
+
+        add_literal_annotation(
+            leaf_uri,
+            definition_prop,
+            row["Definitions"]
+        )
+
+    # ---------------------
+    # COMMENT
+    # ---------------------
+
+    if "Comments" in row.index:
+
+        add_literal_annotation(
+            leaf_uri,
+            RDFS.comment,
+            row["Comments"]
+        )
+
+    # ---------------------
+    # SYNONYMS
+    # ---------------------
+
     if "Synonyms" in row.index:
 
         syns = row["Synonyms"]
@@ -199,29 +293,18 @@ for _, row in df.iterrows():
                 syn = syn.strip()
 
                 if syn:
+
                     g.add(
                         (
                             leaf_uri,
-                            SKOS.altLabel,
+                            synonym_prop,
                             Literal(syn)
                         )
                     )
 
-    # Definition
-    if "Definitions" in row.index:
-        add_literal_annotation(
-            leaf_uri,
-            IAO["0000115"],
-            row["Definitions"]
-        )
-
-    # Comment
-    if "Comments" in row.index:
-        add_literal_annotation(
-            leaf_uri,
-            RDFS.comment,
-            row["Comments"]
-        )
+    # ---------------------
+    # OTHER ANNOTATIONS
+    # ---------------------
 
     for col, prop_uri in annotation_properties.items():
 
@@ -246,15 +329,16 @@ for _, row in df.iterrows():
             )
         )
 
-    # =====================
+    # ---------------------
     # CREATE ANCESTORS
-    # =====================
+    # ---------------------
 
     parent_uri = None
 
-    for i, term in enumerate(path_terms):
+    for term in path_terms:
 
         if term == leaf_label:
+
             current_uri = leaf_uri
 
         else:
@@ -263,7 +347,11 @@ for _, row in df.iterrows():
 
                 generated_uri = URIRef(
                     BASE_IRI +
-                    re.sub(r"[^A-Za-z0-9_]", "_", term)
+                    re.sub(
+                        r"[^A-Za-z0-9_]",
+                        "_",
+                        term
+                    )
                 )
 
                 label_to_uri[term] = generated_uri
