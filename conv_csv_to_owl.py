@@ -1,6 +1,3 @@
-
-
-
 # How to run
 # Delete top couple of rows until the first row is "procedure" or the first term
 # Clean up other rows such as the ones on the bottom
@@ -8,11 +5,7 @@
 # Run this command python conv_csv_to_owl.py
 # nuclex.owl will be created which can be uploaded to protege
 # You can add and remove columns by changing the annotation columns list in this script
-
-# =========================
-
-# CONFIG
-# =========================
+# Change in project settings of web_protege to rdf:label to preferred_name
 
 import pandas as pd
 from rdflib import Graph, Namespace, URIRef, Literal
@@ -25,11 +18,10 @@ import re
 
 CSV_FILE = "ontology.csv"
 OUTPUT_FILE = "nuclex.owl"
-
 BASE_IRI = "http://nuclex.org/ontology/"
 
 # =========================
-# NAMESPACES
+# GRAPH + NAMESPACES
 # =========================
 
 g = Graph()
@@ -43,13 +35,15 @@ g.bind("oio", OIO)
 g.bind("nuclex", NUCLEX)
 
 # =========================
-# CUSTOM ANNOTATION PROPERTIES
+# CUSTOM PROPERTIES
 # =========================
 
+preferred_name_prop = URIRef(BASE_IRI + "preferred_name")
 definition_prop = URIRef(BASE_IRI + "definition")
 synonym_prop = URIRef(BASE_IRI + "synonym")
 
 for prop, label in [
+    (preferred_name_prop, "preferred_name"),
     (definition_prop, "definition"),
     (synonym_prop, "synonym")
 ]:
@@ -85,34 +79,13 @@ annotation_columns = [
 annotation_properties = {}
 
 for col in annotation_columns:
-
-    safe_name = re.sub(
-        r"[^A-Za-z0-9_]",
-        "_",
-        col
-    )
-
-    prop_uri = URIRef(
-        BASE_IRI + safe_name
-    )
+    safe_name = re.sub(r"[^A-Za-z0-9_]", "_", col)
+    prop_uri = URIRef(BASE_IRI + safe_name)
 
     annotation_properties[col] = prop_uri
 
-    g.add(
-        (
-            prop_uri,
-            RDF.type,
-            OWL.AnnotationProperty
-        )
-    )
-
-    g.add(
-        (
-            prop_uri,
-            RDFS.label,
-            Literal(col)
-        )
-    )
+    g.add((prop_uri, RDF.type, OWL.AnnotationProperty))
+    g.add((prop_uri, RDFS.label, Literal(col)))
 
 # =========================
 # HIERARCHY COLUMNS
@@ -134,61 +107,27 @@ hierarchy_cols = [
 # =========================
 
 def clean_id(value):
-    return re.sub(
-        r"[^A-Za-z0-9_]",
-        "_",
-        str(value)
-    )
+    return re.sub(r"[^A-Za-z0-9_]", "_", str(value))
 
-def create_class(uri, label):
-
+def create_class(uri, preferred_name):
     if (uri, RDF.type, OWL.Class) not in g:
+        g.add((uri, RDF.type, OWL.Class))
 
-        g.add(
-            (
-                uri,
-                RDF.type,
-                OWL.Class
-            )
-        )
+        # preferred name instead of rdfs:label
+        g.add((uri, preferred_name_prop, Literal(preferred_name)))
 
-        g.add(
-            (
-                uri,
-                RDFS.label,
-                Literal(label)
-            )
-        )
-
-def add_literal_annotation(
-    subject,
-    predicate,
-    value
-):
-
+def add_literal(subject, predicate, value):
     if pd.notna(value) and str(value).strip():
-
-        g.add(
-            (
-                subject,
-                predicate,
-                Literal(str(value).strip())
-            )
-        )
+        g.add((subject, predicate, Literal(str(value).strip())))
 
 # =========================
 # READ CSV
 # =========================
 
 df = pd.read_csv(CSV_FILE)
-
-# Remove accidental spaces in headers
 df.columns = df.columns.str.strip()
 
-# Hierarchy state
 current_path = [None] * len(hierarchy_cols)
-
-# Label → URI mapping
 label_to_uri = {}
 
 # =========================
@@ -206,101 +145,59 @@ for _, row in df.iterrows():
         value = row.get(col)
 
         if pd.notna(value) and str(value).strip():
-
             current_path[level] = str(value).strip()
 
-            for deeper in range(
-                level + 1,
-                len(hierarchy_cols)
-            ):
+            for deeper in range(level + 1, len(hierarchy_cols)):
                 current_path[deeper] = None
-
             break
 
-    path_terms = [
-        x
-        for x in current_path
-        if x
-    ]
-
+    path_terms = [x for x in current_path if x]
     if not path_terms:
         continue
 
-    leaf_label = path_terms[-1]
+    leaf_name = path_terms[-1]
 
     nuclex_id = row.get("nuclex_nid")
-
     if pd.isna(nuclex_id):
         continue
 
-    leaf_uri = URIRef(
-        BASE_IRI + clean_id(nuclex_id)
-    )
+    leaf_uri = URIRef(BASE_IRI + clean_id(nuclex_id))
+    label_to_uri[leaf_name] = leaf_uri
 
-    label_to_uri[leaf_label] = leaf_uri
-
-    create_class(
-        leaf_uri,
-        leaf_label
-    )
+    create_class(leaf_uri, leaf_name)
 
     # ---------------------
     # NUCLEX ID
     # ---------------------
 
-    add_literal_annotation(
-        leaf_uri,
-        OIO.id,
-        nuclex_id
-    )
+    add_literal(leaf_uri, OIO.id, nuclex_id)
 
     # ---------------------
-    # DEFINITION
+    # DEFINITIONS
     # ---------------------
 
     if "Definitions" in row.index:
-
-        add_literal_annotation(
-            leaf_uri,
-            definition_prop,
-            row["Definitions"]
-        )
+        add_literal(leaf_uri, definition_prop, row["Definitions"])
 
     # ---------------------
-    # COMMENT
+    # COMMENTS
     # ---------------------
 
     if "Comments" in row.index:
-
-        add_literal_annotation(
-            leaf_uri,
-            RDFS.comment,
-            row["Comments"]
-        )
+        add_literal(leaf_uri, RDFS.comment, row["Comments"])
 
     # ---------------------
     # SYNONYMS
     # ---------------------
 
     if "Synonyms" in row.index:
-
         syns = row["Synonyms"]
 
         if pd.notna(syns):
-
             for syn in str(syns).split(","):
-
                 syn = syn.strip()
-
                 if syn:
-
-                    g.add(
-                        (
-                            leaf_uri,
-                            synonym_prop,
-                            Literal(syn)
-                        )
-                    )
+                    g.add((leaf_uri, synonym_prop, Literal(syn)))
 
     # ---------------------
     # OTHER ANNOTATIONS
@@ -312,66 +209,36 @@ for _, row in df.iterrows():
             continue
 
         value = row[col]
-
         if pd.isna(value):
             continue
 
         value = str(value).strip()
-
-        if not value:
-            continue
-
-        g.add(
-            (
-                leaf_uri,
-                prop_uri,
-                Literal(value)
-            )
-        )
+        if value:
+            g.add((leaf_uri, prop_uri, Literal(value)))
 
     # ---------------------
-    # CREATE ANCESTORS
+    # CREATE HIERARCHY
     # ---------------------
 
     parent_uri = None
 
     for term in path_terms:
 
-        if term == leaf_label:
-
+        if term == leaf_name:
             current_uri = leaf_uri
 
         else:
-
             if term not in label_to_uri:
-
-                generated_uri = URIRef(
-                    BASE_IRI +
-                    re.sub(
-                        r"[^A-Za-z0-9_]",
-                        "_",
-                        term
-                    )
+                gen_uri = URIRef(
+                    BASE_IRI + re.sub(r"[^A-Za-z0-9_]", "_", term)
                 )
-
-                label_to_uri[term] = generated_uri
-
-                create_class(
-                    generated_uri,
-                    term
-                )
+                label_to_uri[term] = gen_uri
+                create_class(gen_uri, term)
 
             current_uri = label_to_uri[term]
 
         if parent_uri is not None:
-
-            g.add(
-                (
-                    current_uri,
-                    RDFS.subClassOf,
-                    parent_uri
-                )
-            )
+            g.add((current_uri, RDFS.subClassOf, parent_uri))
 
         parent_uri = current_uri
 
@@ -379,12 +246,8 @@ for _, row in df.iterrows():
 # SAVE
 # =========================
 
-g.serialize(
-    destination=OUTPUT_FILE,
-    format="pretty-xml"
-)
+g.serialize(destination=OUTPUT_FILE, format="pretty-xml")
 
-print()
-print("Finished.")
+print("\nFinished.")
 print(f"Saved ontology to {OUTPUT_FILE}")
 print(f"Total classes: {len(label_to_uri)}")
