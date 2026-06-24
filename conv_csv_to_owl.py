@@ -6,7 +6,7 @@
 # nuclex.owl will be created which can be uploaded to protege
 # You can add and remove columns by changing the annotation columns list in this script
 # Change in project settings of web_protege to rdf:label to preferred_name
-
+# How to fix preferred name issue - go to project settings and just change new entity language seetings
 import pandas as pd
 from rdflib import Graph, Namespace, URIRef, Literal
 from rdflib.namespace import RDF, RDFS, OWL
@@ -114,6 +114,7 @@ def create_class(uri, preferred_name):
         g.add((uri, RDF.type, OWL.Class))
 
         # preferred name instead of rdfs:label
+        g.add((uri, RDFS.label, Literal(preferred_name)))
         g.add((uri, preferred_name_prop, Literal(preferred_name)))
 
 def add_literal(subject, predicate, value):
